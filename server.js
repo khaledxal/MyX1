@@ -13,11 +13,50 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Safely configure static files
+// Helper to safely load file content from root or public
+function getFileContent(filename) {
+  const rootPath = path.join(__dirname, filename);
+  try {
+    if (fs.existsSync(rootPath) && fs.statSync(rootPath).isFile()) {
+      return fs.readFileSync(rootPath, 'utf8');
+    }
+  } catch (_) {}
+
+  const pubPath = path.join(__dirname, 'public', filename);
+  try {
+    if (fs.existsSync(pubPath) && fs.statSync(pubPath).isFile()) {
+      return fs.readFileSync(pubPath, 'utf8');
+    }
+  } catch (_) {}
+
+  return null;
+}
+
+// Serve CSS explicitly
+app.get('/style.css', (req, res) => {
+  const content = getFileContent('style.css');
+  if (content) {
+    res.setHeader('Content-Type', 'text/css; charset=utf-8');
+    return res.send(content);
+  }
+  res.status(404).send('/* style.css not found */');
+});
+
+// Serve JS explicitly
+app.get('/app.js', (req, res) => {
+  const content = getFileContent('app.js');
+  if (content) {
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    return res.send(content);
+  }
+  res.status(404).send('// app.js not found');
+});
+
+// Serve static directory if valid directory
 try {
-  const pubPath = path.join(__dirname, 'public');
-  if (fs.existsSync(pubPath) && fs.statSync(pubPath).isDirectory()) {
-    app.use(express.static(pubPath));
+  const pubDir = path.join(__dirname, 'public');
+  if (fs.existsSync(pubDir) && fs.statSync(pubDir).isDirectory()) {
+    app.use(express.static(pubDir));
   }
 } catch (_) {}
 app.use(express.static(__dirname));
@@ -119,7 +158,6 @@ app.get('/api/profile/:handle', async (req, res) => {
       error: `لم يتم العثور على الحساب @${handle} أو الحساب محظور/خاص.`
     });
   } catch (err) {
-    console.error(`Error fetching profile for @${handle}:`, err.message);
     return res.status(500).json({
       success: false,
       error: 'تعذر جلب بيانات الحساب حالياً.'
@@ -226,9 +264,7 @@ app.get('/api/tweet/:id', async (req, res) => {
 // 5. Search Tweets / Topics
 app.get('/api/search', async (req, res) => {
   const query = (req.query.q || '').trim();
-  if (!query) {
-    return res.status(400).json({ success: false, error: 'كلمة البحث مطلوبة' });
-  }
+  if (!query) return res.status(400).json({ success: false, error: 'كلمة البحث مطلوبة' });
   const feed = req.query.feed || 'latest';
   const count = Math.min(parseInt(req.query.count, 10) || 20, 50);
 
@@ -341,20 +377,14 @@ app.get('/api/trends', async (req, res) => {
   }
 });
 
-// Safe Index HTML resolver
-function getIndexHtmlPath() {
-  const c1 = path.join(__dirname, 'public', 'index.html');
-  try { if (fs.existsSync(c1) && fs.statSync(c1).isFile()) return c1; } catch (_) {}
-
-  const c2 = path.join(__dirname, 'index.html');
-  try { if (fs.existsSync(c2) && fs.statSync(c2).isFile()) return c2; } catch (_) {}
-
-  return c1;
-}
-
-// Catch-all
+// Catch-all route to serve index.html safely
 app.get('*', (req, res) => {
-  res.sendFile(getIndexHtmlPath());
+  const html = getFileContent('index.html');
+  if (html) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(html);
+  }
+  res.status(404).send('<h1>File index.html not found. Please upload index.html</h1>');
 });
 
 app.listen(PORT, () => {
