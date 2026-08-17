@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,7 +12,15 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+
+// Safely configure static files
+try {
+  const pubPath = path.join(__dirname, 'public');
+  if (fs.existsSync(pubPath) && fs.statSync(pubPath).isDirectory()) {
+    app.use(express.static(pubPath));
+  }
+} catch (_) {}
+app.use(express.static(__dirname));
 
 // Simple in-memory cache
 const cache = new Map();
@@ -66,38 +75,23 @@ function enhanceProfile(user) {
 
 // Multi-fallback profile resolver
 async function resolveUserProfile(handle) {
-  // Strategy 1: Direct v1 profile
   try {
     const d1 = await fetchFx(`https://api.fxtwitter.com/${encodeURIComponent(handle)}`);
-    if (d1 && d1.code === 200 && d1.user) {
-      return d1.user;
-    }
-  } catch (e1) {
-    // Continue to strategy 2
-  }
+    if (d1 && d1.code === 200 && d1.user) return d1.user;
+  } catch (e1) {}
 
-  // Strategy 2: v2 profile
   try {
     const d2 = await fetchFx(`https://api.fxtwitter.com/2/profile/${encodeURIComponent(handle)}?about_account=1`);
-    if (d2 && d2.code === 200 && d2.user) {
-      return d2.user;
-    }
-  } catch (e2) {
-    // Continue to strategy 3
-  }
+    if (d2 && d2.code === 200 && d2.user) return d2.user;
+  } catch (e2) {}
 
-  // Strategy 3: Extract author from latest statuses
   try {
     const d3 = await fetchFx(`https://api.fxtwitter.com/2/profile/${encodeURIComponent(handle)}/statuses?count=1`);
     if (d3 && d3.code === 200 && Array.isArray(d3.results) && d3.results.length > 0) {
       const author = d3.results[0].author;
-      if (author && author.screen_name) {
-        return author;
-      }
+      if (author && author.screen_name) return author;
     }
-  } catch (e3) {
-    // Strategy 3 failed
-  }
+  } catch (e3) {}
 
   return null;
 }
@@ -106,7 +100,7 @@ async function resolveUserProfile(handle) {
 app.get('/api/profile/:handle', async (req, res) => {
   const handle = req.params.handle.trim().replace(/^@/, '');
   if (!handle) {
-    return res.status(400).json({ success: false, error: 'اسم المستخدم مطلوب (Username is required)' });
+    return res.status(400).json({ success: false, error: 'اسم المستخدم مطلوب' });
   }
 
   const cacheKey = `profile_${handle.toLowerCase()}`;
@@ -128,7 +122,7 @@ app.get('/api/profile/:handle', async (req, res) => {
     console.error(`Error fetching profile for @${handle}:`, err.message);
     return res.status(500).json({
       success: false,
-      error: 'تعذر جلب بيانات الحساب حالياً. يرجى المحاولة لاحقاً.'
+      error: 'تعذر جلب بيانات الحساب حالياً.'
     });
   }
 });
@@ -162,10 +156,9 @@ app.get('/api/tweets/:handle', async (req, res) => {
       error: data.message || 'لا توجد تغريدات متاحة لهذا الحساب'
     });
   } catch (err) {
-    console.error(`Error fetching tweets for @${handle}:`, err.message);
-    return res.status(err.status || 500).json({
+    return res.status(500).json({
       success: false,
-      error: err.message || 'تعذر جلب التغريدات حالياً.'
+      error: 'تعذر جلب التغريدات حالياً.'
     });
   }
 });
@@ -198,10 +191,9 @@ app.get('/api/media/:handle', async (req, res) => {
       error: data.message || 'لا توجد وسائط لهذا الحساب'
     });
   } catch (err) {
-    console.error(`Error fetching media for @${handle}:`, err.message);
-    return res.status(err.status || 500).json({
+    return res.status(500).json({
       success: false,
-      error: err.message || 'تعذر جلب الوسائط حالياً.'
+      error: 'تعذر جلب الوسائط حالياً.'
     });
   }
 });
@@ -224,10 +216,9 @@ app.get('/api/tweet/:id', async (req, res) => {
       error: data.message || 'تعذر العثور على التغريدة'
     });
   } catch (err) {
-    console.error(`Error fetching tweet ${tweetId}:`, err.message);
-    return res.status(err.status || 500).json({
+    return res.status(500).json({
       success: false,
-      error: err.message || 'تعذر جلب التغريدة.'
+      error: 'تعذر جلب التغريدة.'
     });
   }
 });
@@ -236,7 +227,7 @@ app.get('/api/tweet/:id', async (req, res) => {
 app.get('/api/search', async (req, res) => {
   const query = (req.query.q || '').trim();
   if (!query) {
-    return res.status(400).json({ success: false, error: 'كلمة البحث مطلوبة (Search query required)' });
+    return res.status(400).json({ success: false, error: 'كلمة البحث مطلوبة' });
   }
   const feed = req.query.feed || 'latest';
   const count = Math.min(parseInt(req.query.count, 10) || 20, 50);
@@ -257,20 +248,17 @@ app.get('/api/search', async (req, res) => {
       error: data.message || 'لا توجد نتائج بحث'
     });
   } catch (err) {
-    console.error(`Error searching query "${query}":`, err.message);
-    return res.status(err.status || 500).json({
+    return res.status(500).json({
       success: false,
-      error: err.message || 'تعذر إجراء البحث.'
+      error: 'تعذر إجراء البحث.'
     });
   }
 });
 
-// 6. Get User Spaces / Audio Broadcasts (SpacesDashboard Integration)
+// 6. Get User Spaces
 app.get('/api/spaces/:handle', async (req, res) => {
   const handle = req.params.handle.trim().replace(/^@/, '');
-  if (!handle) {
-    return res.status(400).json({ success: false, error: 'اسم المستخدم مطلوب' });
-  }
+  if (!handle) return res.status(400).json({ success: false, error: 'اسم المستخدم مطلوب' });
 
   const cacheKey = `spaces_${handle.toLowerCase()}`;
   const cached = getCached(cacheKey);
@@ -287,7 +275,6 @@ app.get('/api/spaces/:handle', async (req, res) => {
     if (searchData.code === 200 && Array.isArray(searchData.results)) {
       searchData.results.forEach(tweet => {
         const text = tweet.text || '';
-        // Extract space ID from URLs like https://x.com/i/spaces/1gqxvNrEbOjxB
         const spaceMatch = text.match(/(?:x\.com|twitter\.com)\/i\/spaces\/([a-zA-Z0-9]+)/i) ||
                            text.match(/spaces\/([a-zA-Z0-9]{12,15})/i);
         
@@ -310,29 +297,6 @@ app.get('/api/spaces/:handle', async (req, res) => {
             views: tweet.views || 0,
             author: tweet.author || {}
           });
-        } else if (tweet.media?.broadcast) {
-          // Twitter Broadcast entity
-          const b = tweet.media.broadcast;
-          const bId = b.broadcast_id || tweet.id;
-          if (!seenSpaceIds.has(bId)) {
-            seenSpaceIds.add(bId);
-            spacesList.push({
-              id: tweet.id,
-              spaceId: bId,
-              title: b.title || text || `مساحة @${handle}`,
-              rawText: text,
-              url: b.url || `https://x.com/i/spaces/${bId}`,
-              spacesDashboardUrl: `https://spacesdashboard.com/u/${handle}`,
-              created_at: tweet.created_at,
-              created_timestamp: tweet.created_timestamp,
-              likes: tweet.likes || 0,
-              reposts: tweet.reposts || 0,
-              replies: tweet.replies || 0,
-              views: tweet.views || 0,
-              state: b.state || 'ENDED',
-              author: tweet.author || {}
-            });
-          }
         }
       });
     }
@@ -347,7 +311,6 @@ app.get('/api/spaces/:handle', async (req, res) => {
     setCache(cacheKey, payload, 60 * 1000);
     return res.json({ success: true, data: payload });
   } catch (err) {
-    console.error(`Error fetching spaces for @${handle}:`, err.message);
     return res.json({
       success: true,
       data: {
@@ -374,16 +337,26 @@ app.get('/api/trends', async (req, res) => {
     }
     return res.json({ success: true, data: [] });
   } catch (err) {
-    console.error('Error fetching trends:', err.message);
     return res.json({ success: true, data: [] });
   }
 });
 
-// Catch-all for SPA
+// Safe Index HTML resolver
+function getIndexHtmlPath() {
+  const c1 = path.join(__dirname, 'public', 'index.html');
+  try { if (fs.existsSync(c1) && fs.statSync(c1).isFile()) return c1; } catch (_) {}
+
+  const c2 = path.join(__dirname, 'index.html');
+  try { if (fs.existsSync(c2) && fs.statSync(c2).isFile()) return c2; } catch (_) {}
+
+  return c1;
+}
+
+// Catch-all
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(getIndexHtmlPath());
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 خادم استعراض تويتر يعمل الآن على: http://localhost:${PORT}`);
+  console.log(`🚀 خادم استعراض تويتر يعمل الآن على المنفذ: ${PORT}`);
 });
